@@ -27,7 +27,7 @@ from nautilus_trader.common.component import MessageBus
 from nautilus_trader.common.component import TestClock
 from nautilus_trader.common.providers import InstrumentProvider
 from nautilus_trader.core.data import Data
-from nautilus_trader.execution.messages import GenerateFillReports
+from nautilus_trader.execution.messages import GenerateFillReports, SubmitOrderList
 from nautilus_trader.execution.messages import GenerateOrderStatusReport
 from nautilus_trader.execution.messages import GenerateOrderStatusReports
 from nautilus_trader.execution.messages import GeneratePositionStatusReports
@@ -186,6 +186,9 @@ class SandboxExecutionClient(LiveExecutionClient):
 
     def submit_order(self, command):
         return self._client.submit_order(command)
+
+    def submit_order_list(self, command):
+        return self._client.submit_order_list(command)
 
     def modify_order(self, command):
         return self._client.modify_order(command)
