@@ -17,15 +17,18 @@ use std::fmt::Display;
 
 use alloy_primitives::Address;
 use nautilus_core::UnixNanos;
+use serde::{Deserialize, Serialize};
 
 use crate::{
+    data::GetTsInit,
     defi::{amm::SharedPool, chain::SharedChain, dex::SharedDex},
     enums::OrderSide,
+    identifiers::InstrumentId,
     types::{Price, Quantity},
 };
 
 /// Represents a token swap transaction on a decentralized exchange (DEX).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Swap {
     /// The blockchain network where the swap occurred
     pub chain: SharedChain,
@@ -35,6 +38,12 @@ pub struct Swap {
     pub pool: SharedPool,
     /// The blockchain block number at which the swap was executed.
     pub block: u64,
+    /// The unique hash identifier of the blockchain transaction containing the swap.
+    pub transaction_hash: String,
+    /// The index position of the transaction within the block.
+    pub transaction_index: u32,
+    /// The index position of the swap event log within the transaction.
+    pub log_index: u32,
     /// The blockchain address of the user or contract that initiated the swap.
     pub sender: Address,
     /// The direction of the swap from the perspective of the base token.
@@ -45,6 +54,8 @@ pub struct Swap {
     pub price: Price,
     /// The timestamp of the swap in Unix nanoseconds.
     pub timestamp: UnixNanos,
+    /// UNIX timestamp (nanoseconds) when the instance was initialized.
+    pub ts_init: UnixNanos,
 }
 
 impl Swap {
@@ -56,6 +67,9 @@ impl Swap {
         dex: SharedDex,
         pool: SharedPool,
         block: u64,
+        transaction_hash: String,
+        transaction_index: u32,
+        log_index: u32,
         timestamp: UnixNanos,
         sender: Address,
         side: OrderSide,
@@ -67,12 +81,28 @@ impl Swap {
             dex,
             pool,
             block,
+            transaction_hash,
+            transaction_index,
+            log_index,
             timestamp,
             sender,
             side,
             quantity,
             price,
+            ts_init: timestamp, // TODO: Use swap timestamp as init timestamp for now
         }
+    }
+
+    /// Returns the instrument ID for this swap.
+    #[must_use]
+    pub fn instrument_id(&self) -> InstrumentId {
+        self.pool.instrument_id()
+    }
+}
+
+impl GetTsInit for Swap {
+    fn ts_init(&self) -> UnixNanos {
+        self.ts_init
     }
 }
 
