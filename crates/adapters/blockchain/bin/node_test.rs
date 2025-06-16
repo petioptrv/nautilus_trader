@@ -16,11 +16,11 @@
 use std::{
     ops::{Deref, DerefMut},
     sync::Arc,
+    time::Duration,
 };
 
 use nautilus_blockchain::{
-    config::BlockchainAdapterConfig,
-    factories::{BlockchainClientConfig, BlockchainDataClientFactory},
+    config::BlockchainDataClientConfig, factories::BlockchainDataClientFactory,
 };
 use nautilus_common::{
     actor::{DataActor, DataActorCore, data_actor::DataActorConfig},
@@ -29,16 +29,77 @@ use nautilus_common::{
 use nautilus_core::env::get_env_var;
 use nautilus_live::node::LiveNode;
 use nautilus_model::{
-    defi::{
-        amm::Pool,
-        chain::{Blockchain, Chain, chains},
-        liquidity::PoolLiquidityUpdate,
-        swap::Swap,
-    },
+    defi::{Blockchain, Chain, Pool, PoolLiquidityUpdate, Swap, chain::chains},
     identifiers::{ClientId, TraderId},
 };
 
 // Run with `cargo run -p nautilus-blockchain --bin node_test --features hypersync,python`
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // TODO: Initialize Python interpreter only if python feature is enabled
+    // #[cfg(feature = "python")]
+    pyo3::prepare_freethreaded_python();
+
+    dotenvy::dotenv().ok();
+
+    let environment = Environment::Live;
+    let trader_id = TraderId::default();
+    let node_name = "TESTER-001".to_string();
+
+    let chain: Chain = match std::env::var("CHAIN")
+        .ok()
+        .and_then(|s| s.parse::<Blockchain>().ok())
+    {
+        Some(Blockchain::Ethereum) => chains::ETHEREUM.clone(),
+        Some(Blockchain::Base) => chains::BASE.clone(),
+        Some(Blockchain::Arbitrum) => chains::ARBITRUM.clone(),
+        Some(Blockchain::Polygon) => chains::POLYGON.clone(),
+        _ => {
+            println!("⚠️  No valid CHAIN env var found, using Ethereum as default");
+            chains::ETHEREUM.clone()
+        }
+    };
+    let wss_rpc_url = get_env_var("RPC_WSS_URL")?;
+    let http_rpc_url = get_env_var("RPC_HTTP_URL")?;
+
+    let client_factory = BlockchainDataClientFactory::new();
+    let client_config = BlockchainDataClientConfig::new(
+        Arc::new(chain),
+        http_rpc_url,
+        None, // RPC requests per second
+        Some(wss_rpc_url),
+        false, // Don't use hypersync for live data
+        None,  // from_block
+    );
+
+    let mut node = LiveNode::builder(node_name, trader_id, environment)?
+        .with_load_state(false)
+        .with_save_state(false)
+        .add_data_client(
+            None, // Use factory name
+            client_factory,
+            client_config,
+        )?
+        .build()?;
+
+    // Create and register a blockchain subscriber actor
+    let client_id = ClientId::new("BLOCKCHAIN");
+    let pool_addresses = vec![
+        // Example pool addresses - these would be real pool addresses for testing
+        "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640".to_string(), // USDC/ETH 0.05% on Uniswap V3
+                                                                  // Add more pool addresses as needed for testing
+    ];
+
+    let actor_config = BlockchainSubscriberActorConfig::new(client_id, pool_addresses);
+    let actor = BlockchainSubscriberActor::new(actor_config);
+
+    node.add_actor(actor)?;
+
+    node.run().await?;
+
+    Ok(())
+}
 
 /// Configuration for the blockchain subscriber actor.
 #[derive(Debug, Clone)]
@@ -94,7 +155,7 @@ impl DerefMut for BlockchainSubscriberActor {
 impl DataActor for BlockchainSubscriberActor {
     fn on_start(&mut self) -> anyhow::Result<()> {
         log::info!(
-            "Starting blockchain subscriber actor for {} pools",
+            "Starting blockchain subscriber actor for {} pool(s)",
             self.config.pool_addresses.len()
         );
 
@@ -110,13 +171,33 @@ impl DataActor for BlockchainSubscriberActor {
             // The actual subscription logic would be handled by the BlockchainDataClient
         }
 
+        self.clock().set_timer(
+            "TEST-TIMER-1-SECOND",
+            Duration::from_secs(1),
+            None,
+            None,
+            None,
+            Some(true),
+            Some(false),
+        )?;
+
+        self.clock().set_timer(
+            "TEST-TIMER-2-SECOND",
+            Duration::from_secs(2),
+            None,
+            None,
+            None,
+            Some(true),
+            Some(false),
+        )?;
+
         log::info!("Blockchain subscriber actor started successfully");
         Ok(())
     }
 
     fn on_stop(&mut self) -> anyhow::Result<()> {
         log::info!(
-            "Stopping blockchain subscriber actor for {} pools",
+            "Stopping blockchain subscriber actor for {} pool(s)",
             self.config.pool_addresses.len()
         );
 
@@ -180,78 +261,4 @@ impl BlockchainSubscriberActor {
     pub const fn pool_count(&self) -> usize {
         self.received_pools.len()
     }
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // TODO: Initialize Python interpreter only if python feature is enabled
-    // #[cfg(feature = "python")]
-    pyo3::prepare_freethreaded_python();
-
-    dotenvy::dotenv().ok();
-
-    let environment = Environment::Live;
-    let trader_id = TraderId::default();
-    let node_name = "TESTER-001".to_string();
-
-    let chain: Chain = match std::env::var("CHAIN")
-        .ok()
-        .and_then(|s| s.parse::<Blockchain>().ok())
-    {
-        Some(Blockchain::Ethereum) => chains::ETHEREUM.clone(),
-        Some(Blockchain::Base) => chains::BASE.clone(),
-        Some(Blockchain::Arbitrum) => chains::ARBITRUM.clone(),
-        Some(Blockchain::Polygon) => chains::POLYGON.clone(),
-        _ => {
-            println!("⚠️  No valid CHAIN env var found, using Ethereum as default");
-            chains::ETHEREUM.clone()
-        }
-    };
-
-    let chain = Arc::new(chain);
-    println!("   - Using chain: {}", chain.name);
-
-    // Try to get RPC URLs from environment, fallback to test values if not available
-    let http_rpc_url = get_env_var("RPC_HTTP_URL").unwrap_or_else(|_| {
-        println!("⚠️  RPC_HTTP_URL not found, using placeholder");
-        "https://eth-mainnet.example.com".to_string()
-    });
-    let wss_rpc_url = get_env_var("RPC_WSS_URL").ok();
-
-    let blockchain_config = BlockchainAdapterConfig::new(
-        http_rpc_url,
-        None, // HyperSync URL not needed for this test
-        wss_rpc_url,
-        false, // Don't cache locally for this test
-    );
-
-    let client_factory = BlockchainDataClientFactory::new();
-    let client_config = BlockchainClientConfig::new(blockchain_config, chain.clone());
-
-    let mut node = LiveNode::builder(node_name, trader_id, environment)?
-        .with_load_state(false)
-        .with_save_state(false)
-        .add_data_client(
-            None, // Use factory name
-            client_factory,
-            client_config,
-        )?
-        .build()?;
-
-    // Create and register a blockchain subscriber actor
-    let client_id = ClientId::new("BLOCKCHAIN");
-    let pool_addresses = vec![
-        // Example pool addresses - these would be real pool addresses for testing
-        "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640".to_string(), // USDC/ETH 0.05% on Uniswap V3
-                                                                  // Add more pool addresses as needed for testing
-    ];
-
-    let actor_config = BlockchainSubscriberActorConfig::new(client_id, pool_addresses);
-    let actor = BlockchainSubscriberActor::new(actor_config);
-
-    node.add_actor(actor)?;
-
-    node.run().await?;
-
-    Ok(())
 }

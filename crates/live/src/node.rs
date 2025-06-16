@@ -19,7 +19,6 @@
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use anyhow::Context;
 use nautilus_common::{
     actor::{Actor, DataActor},
     clock::LiveClock,
@@ -34,7 +33,6 @@ use nautilus_system::{
     factories::{ClientConfig, DataClientFactory, ExecutionClientFactory},
     kernel::NautilusKernel,
 };
-use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{config::LiveNodeConfig, runner::AsyncRunner};
 
@@ -47,7 +45,6 @@ pub struct LiveNode {
     clock: Rc<RefCell<LiveClock>>,
     kernel: NautilusKernel,
     runner: AsyncRunner,
-    signal_tx: Option<UnboundedSender<()>>,
     config: LiveNodeConfig,
     is_running: bool,
 }
@@ -87,9 +84,9 @@ impl LiveNode {
             }
         }
 
-        let clock = Rc::new(RefCell::new(LiveClock::new()));
+        let runner = AsyncRunner::new();
+        let clock = Rc::new(RefCell::new(LiveClock::default()));
         let kernel = NautilusKernel::new(name, config.clone())?;
-        let (runner, signal_tx) = AsyncRunner::new(clock.clone());
 
         log::info!("LiveNode built successfully with kernel config");
 
@@ -97,7 +94,6 @@ impl LiveNode {
             clock,
             kernel,
             runner,
-            signal_tx: Some(signal_tx),
             config,
             is_running: false,
         })
@@ -150,8 +146,6 @@ impl LiveNode {
     ///
     /// Returns an error if the node fails to start or encounters a runtime error.
     pub async fn run(&mut self) -> anyhow::Result<()> {
-        let signal_tx = self.signal_tx.take().context("LiveNode already running")?;
-
         self.start().await?;
 
         tokio::select! {
@@ -164,9 +158,7 @@ impl LiveNode {
                 match result {
                     Ok(()) => {
                         log::info!("Received SIGINT, shutting down");
-                        if let Err(e) = signal_tx.send(()) {
-                            log::error!("Failed to send shutdown signal: {e}");
-                        }
+                        self.runner.stop();
                         // Give the AsyncRunner a moment to process the shutdown signal
                         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     }
@@ -418,9 +410,9 @@ impl LiveNodeBuilder {
             self.data_client_factories.len()
         );
 
-        let clock = Rc::new(RefCell::new(LiveClock::new()));
+        let runner = AsyncRunner::new();
+        let clock = Rc::new(RefCell::new(LiveClock::default()));
         let kernel = NautilusKernel::new("LiveNode".to_string(), self.config.clone())?;
-        let (runner, signal_tx) = AsyncRunner::new(clock.clone());
 
         // Create and register data clients
         for (name, factory) in self.data_client_factories {
@@ -474,7 +466,6 @@ impl LiveNodeBuilder {
             clock,
             kernel,
             runner,
-            signal_tx: Some(signal_tx),
             config: self.config,
             is_running: false,
         })

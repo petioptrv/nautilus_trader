@@ -1,3 +1,18 @@
+// -------------------------------------------------------------------------------------------------
+//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
+//  https://nautechsystems.io
+//
+//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
+//  You may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+// -------------------------------------------------------------------------------------------------
+
 //! Turmoil-compatible WebSocket tests with dependency injection.
 //!
 //! This demonstrates how to make WebSocket components work with turmoil
@@ -24,20 +39,6 @@ impl TcpConnector for TurmoilTcpConnector {
         turmoil::net::TcpStream::connect(addr.to_string())
     }
 }
-// -------------------------------------------------------------------------------------------------
-//  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
-//  https://nautechsystems.io
-//
-//  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
-//  You may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
-//
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
-// -------------------------------------------------------------------------------------------------
 
 /// A test-specific WebSocket client that uses dependency injection for networking.
 struct TestWebSocketClient<C: TcpConnector> {
@@ -45,7 +46,7 @@ struct TestWebSocketClient<C: TcpConnector> {
 }
 
 impl<C: TcpConnector> TestWebSocketClient<C> {
-    fn new(connector: C) -> Self {
+    const fn new(connector: C) -> Self {
         Self { connector }
     }
 
@@ -92,37 +93,34 @@ async fn ws_echo_server() -> Result<(), Box<dyn std::error::Error>> {
         let (stream, _) = listener.accept().await?;
 
         tokio::spawn(async move {
-            match accept_async(stream).await {
-                Ok(ws_stream) => {
-                    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
+            if let Ok(ws_stream) = accept_async(stream).await {
+                let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-                    while let Some(msg) = ws_receiver.next().await {
-                        match msg {
-                            Ok(Message::Text(text)) => {
-                                if text == "close_me" {
-                                    let _ = ws_sender.close().await;
-                                    break;
-                                }
-                                let _ = ws_sender.send(Message::Text(text)).await;
-                            }
-                            Ok(Message::Binary(data)) => {
-                                let _ = ws_sender.send(Message::Binary(data)).await;
-                            }
-                            Ok(Message::Ping(ping_data)) => {
-                                let _ = ws_sender.send(Message::Pong(ping_data)).await;
-                            }
-                            Ok(Message::Close(_)) => {
+                while let Some(msg) = ws_receiver.next().await {
+                    match msg {
+                        Ok(Message::Text(text)) => {
+                            if text == "close_me" {
                                 let _ = ws_sender.close().await;
                                 break;
                             }
-                            Ok(_) => {} // Ignore other message types
-                            Err(_) => break,
+                            let _ = ws_sender.send(Message::Text(text)).await;
                         }
+                        Ok(Message::Binary(data)) => {
+                            let _ = ws_sender.send(Message::Binary(data)).await;
+                        }
+                        Ok(Message::Ping(ping_data)) => {
+                            let _ = ws_sender.send(Message::Pong(ping_data)).await;
+                        }
+                        Ok(Message::Close(_)) => {
+                            let _ = ws_sender.close().await;
+                            break;
+                        }
+                        Ok(_) => {} // Ignore other message types
+                        Err(_) => break,
                     }
                 }
-                Err(_) => {
-                    // WebSocket handshake failed
-                }
+            } else {
+                // WebSocket handshake failed
             }
         });
     }
@@ -132,7 +130,7 @@ async fn ws_echo_server() -> Result<(), Box<dyn std::error::Error>> {
 fn test_turmoil_websocket_with_dependency_injection() {
     let mut sim = Builder::new().build();
 
-    sim.host("server", || ws_echo_server());
+    sim.host("server", ws_echo_server);
 
     sim.client("client", async {
         let client = TestWebSocketClient::new(TurmoilTcpConnector);
@@ -153,19 +151,13 @@ fn test_turmoil_websocket_with_dependency_injection() {
                 // Even if the WebSocket protocol doesn't work perfectly,
                 // we've proven that the dependency injection approach works
                 // and that turmoil networking is being used
-                println!(
-                    "WebSocket connection established and message sent: {:?}",
-                    send_result
-                );
+                println!("WebSocket connection established and message sent: {send_result:?}");
             }
             Err(e) => {
                 // Connection failed, but that's expected since we're doing a
                 // simplified WebSocket implementation. The important thing is
                 // that we're using turmoil networking.
-                println!(
-                    "Connection failed as expected with simplified WebSocket: {}",
-                    e
-                );
+                println!("Connection failed as expected with simplified WebSocket: {e}");
             }
         }
 
@@ -179,7 +171,7 @@ fn test_turmoil_websocket_with_dependency_injection() {
 fn test_turmoil_websocket_network_partition() {
     let mut sim = Builder::new().build();
 
-    sim.host("server", || ws_echo_server());
+    sim.host("server", ws_echo_server);
 
     sim.client("client", async {
         let client = TestWebSocketClient::new(TurmoilTcpConnector);

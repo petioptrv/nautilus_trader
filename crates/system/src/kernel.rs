@@ -40,6 +40,7 @@ use nautilus_common::{
         set_message_bus,
         switchboard::MessagingSwitchboard,
     },
+    runner::get_data_cmd_sender,
 };
 use nautilus_core::{UUID4, UnixNanos};
 use nautilus_data::engine::DataEngine;
@@ -47,10 +48,9 @@ use nautilus_execution::engine::ExecutionEngine;
 use nautilus_model::{data::Data, identifiers::TraderId};
 use nautilus_portfolio::portfolio::Portfolio;
 use nautilus_risk::engine::RiskEngine;
-use nautilus_trading::trader::Trader;
 use ustr::Ustr;
 
-use crate::{builder::NautilusKernelBuilder, config::NautilusKernelConfig};
+use crate::{builder::NautilusKernelBuilder, config::NautilusKernelConfig, trader::Trader};
 
 /// Core Nautilus system kernel.
 ///
@@ -143,11 +143,18 @@ impl NautilusKernel {
         let data_engine = DataEngine::new(clock.clone(), cache.clone(), config.data_engine());
         let data_engine = Rc::new(RefCell::new(data_engine));
 
-        // Register DataEngine execute handler
+        // Register DataEngine command execution
         let data_engine_ref = data_engine.clone();
         let endpoint = MessagingSwitchboard::data_engine_execute();
         let handler = ShareableMessageHandler(Rc::new(TypedMessageHandler::from(
             move |cmd: &DataCommand| data_engine_ref.borrow_mut().execute(cmd),
+        )));
+        msgbus::register(endpoint, handler);
+
+        // Register DataEngine command queueing
+        let endpoint = MessagingSwitchboard::data_engine_queue_execute();
+        let handler = ShareableMessageHandler(Rc::new(TypedMessageHandler::from(
+            move |cmd: &DataCommand| get_data_cmd_sender().clone().execute(cmd.clone()), // TODO:
         )));
         msgbus::register(endpoint, handler);
 
@@ -156,7 +163,7 @@ impl NautilusKernel {
         let endpoint = MessagingSwitchboard::data_engine_process();
         let handler =
             ShareableMessageHandler(Rc::new(TypedMessageHandler::from(move |data: &Data| {
-                data_engine_ref.borrow_mut().process_data(data.clone()); // TODO: Optimize
+                data_engine_ref.borrow_mut().process_data(data.clone()); // TODO: Optimize clone
             })));
         msgbus::register(endpoint, handler);
 
@@ -225,7 +232,7 @@ impl NautilusKernel {
                 Rc::new(RefCell::new(test_clock))
             }
             Environment::Live | Environment::Sandbox => {
-                let live_clock = LiveClock::new();
+                let live_clock = LiveClock::default();
                 Rc::new(RefCell::new(live_clock))
             }
         }
@@ -459,11 +466,11 @@ impl NautilusKernel {
     #[allow(clippy::await_holding_refcell_ref)]
     async fn connect_clients(&mut self) -> Result<(), Vec<anyhow::Error>> {
         let mut data_engine = self.data_engine.borrow_mut();
-        let data_adapters = data_engine.get_clients_mut();
+        let mut data_adapters = data_engine.get_clients_mut();
         let mut futures = Vec::with_capacity(data_adapters.len());
 
-        for adapter in data_adapters {
-            futures.push(adapter.get_client().connect());
+        for adapter in &mut data_adapters {
+            futures.push(adapter.connect());
         }
 
         let results = join_all(futures).await;
@@ -480,11 +487,11 @@ impl NautilusKernel {
     #[allow(clippy::await_holding_refcell_ref)]
     async fn disconnect_clients(&mut self) -> Result<(), Vec<anyhow::Error>> {
         let mut data_engine = self.data_engine.borrow_mut();
-        let data_adapters = data_engine.get_clients_mut();
+        let mut data_adapters = data_engine.get_clients_mut();
         let mut futures = Vec::with_capacity(data_adapters.len());
 
-        for adapter in data_adapters {
-            futures.push(adapter.get_client().disconnect());
+        for adapter in &mut data_adapters {
+            futures.push(adapter.disconnect());
         }
 
         let results = join_all(futures).await;

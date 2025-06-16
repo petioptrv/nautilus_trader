@@ -33,6 +33,7 @@ from nautilus_trader.core.correctness import PyCondition
 from nautilus_trader.core.datetime import dt_to_unix_nanos
 from nautilus_trader.data.config import DataEngineConfig
 from nautilus_trader.execution.config import ExecEngineConfig
+from nautilus_trader.live.config import LiveDataClientConfig
 from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import BarType
 from nautilus_trader.model.identifiers import InstrumentId
@@ -42,7 +43,6 @@ from nautilus_trader.system.config import NautilusKernelConfig
 
 
 def parse_filters_expr(s: str | None):
-    # TODO (bm) - could we do this better, probably requires writing our own parser?
     """
     Parse a pyarrow.dataset filter expression from a string.
 
@@ -54,24 +54,52 @@ def parse_filters_expr(s: str | None):
     >>> parse_filters_expr("None")
 
     """
-    from pyarrow.dataset import field
+    import re
 
-    assert field  # Required for eval
+    from pyarrow.dataset import field
 
     if not s:
         return None
 
-    def safer_eval(input_string):
-        allowed_names = {"field": field}
-        code = compile(input_string, "<string>", "eval")
+    # Normalise single-quoted filters so our regex only has to reason about
+    # the double-quoted form produced by Nautilus itself. If the expression
+    # already contains double quotes we leave it unchanged to avoid corrupting
+    # mixed quoting scenarios.
+    if "'" in s and '"' not in s:
+        s = s.replace("'", '"')
 
-        for name in code.co_names:
-            if name not in allowed_names:
-                raise NameError(f"Use of {name} not allowed")
+    # Security: Only allow very specific PyArrow field expressions
+    # Pattern matches: field("name") == "value", field("name") != "value", etc.
+    # Optional opening/closing parentheses are allowed around each comparison so
+    # we can safely compose expressions such as
+    #     (field("Currency") == "CHF") | (field("Symbol") == "USD")
+    # Supported grammar (regex-validated):
+    #     [ '(' ] field("name") <op> "literal" [ ')' ] ( ( '|' | '&' ) ... )*
+    safe_pattern = (
+        r"^(\()?"
+        r'field\("[^"]+"\)\s*[!=<>]+\s*"[^"]*"'
+        r"(\))?"
+        r'(\s*[|&]\s*(\()?field\("[^"]+"\)\s*[!=<>]+\s*"[^"]*"(\))?)*$'
+    )
 
-        return eval(code, {}, allowed_names)  # noqa
+    if not re.match(safe_pattern, s.strip()):
+        raise ValueError(
+            f"Filter expression '{s}' is not allowed. Only field() comparisons are permitted.",
+        )
 
-    return safer_eval(s)  # Only allow use of the field object
+    try:
+        # For now, rely on the regex validation above to guarantee safety and
+        # evaluate the expression in a minimal global namespace that only exposes
+        # the `field` helper. Built-ins are intentionally left untouched because
+        # PyArrow requires access to them (for example it imports `decimal` under
+        # the hood). Stripping them leads to a hard crash inside the C++ layer
+        # of Arrow. The expression is still safe because the regex prevents any
+        # reference other than the allowed `field(...)` comparisons.
+        allowed_globals = {"field": field}
+        return eval(s, allowed_globals, {})  # noqa: S307
+
+    except Exception as e:
+        raise ValueError(f"Failed to parse filter expression '{s}': {e}")
 
 
 class BacktestVenueConfig(NautilusConfig, frozen=True):
@@ -406,6 +434,8 @@ class BacktestRunConfig(NautilusConfig, frozen=True):
     end : datetime or str or int, optional
         The end datetime (UTC) for the backtest run.
         If ``None`` engine runs to the end of the data.
+    data_clients : dict[str, type[LiveDataClientConfig]], optional
+        The data clients configuration for the backtest run.
 
     Notes
     -----
@@ -423,6 +453,7 @@ class BacktestRunConfig(NautilusConfig, frozen=True):
     dispose_on_completion: bool = True
     start: str | int | None = None
     end: str | int | None = None
+    data_clients: dict[str, type[LiveDataClientConfig]] | None = None
 
 
 class SimulationModuleConfig(ActorConfig, frozen=True):

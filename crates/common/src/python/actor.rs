@@ -631,7 +631,7 @@ impl PyDataActor {
 ////////////////////////////////////////////////////////////////////////////////
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc, str::FromStr};
+    use std::{cell::RefCell, rc::Rc, str::FromStr, sync::Arc};
 
     use nautilus_model::{
         data::{BarType, DataType},
@@ -642,7 +642,13 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use super::PyDataActor;
-    use crate::{cache::Cache, clock::TestClock, component::Component, enums::ComponentState};
+    use crate::{
+        cache::Cache,
+        clock::TestClock,
+        component::Component,
+        enums::ComponentState,
+        runner::{SyncDataCommandSender, set_data_cmd_sender},
+    };
 
     #[fixture]
     fn clock() -> Rc<RefCell<TestClock>> {
@@ -688,6 +694,10 @@ mod tests {
         cache: Rc<RefCell<Cache>>,
         trader_id: TraderId,
     ) -> PyDataActor {
+        // Set up sync data command sender for tests
+        let sender = SyncDataCommandSender;
+        set_data_cmd_sender(Arc::new(sender));
+
         let mut actor = PyDataActor::py_new(None).unwrap();
         actor.register(trader_id, clock, cache).unwrap();
         actor

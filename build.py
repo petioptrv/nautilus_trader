@@ -76,8 +76,8 @@ if IS_LINUX:
     os.environ["LDSHARED"] = "clang -shared"
 
 if IS_MACOS and IS_ARM64:
-    os.environ["CFLAGS"] = "-arch arm64"
-    os.environ["LDFLAGS"] = "-arch arm64 -w"
+    os.environ["CFLAGS"] = f"{os.environ.get('CFLAGS', '')} -arch arm64"
+    os.environ["LDFLAGS"] = f"{os.environ.get('LDFLAGS', '')} -arch arm64 -w"
 
 if IS_LINUX and IS_ARM64:
     os.environ["CFLAGS"] = f"{os.environ.get('CFLAGS', '')} -fPIC"
@@ -123,10 +123,15 @@ RUST_LIBS: list[str] = [str(path) for path in RUST_LIB_PATHS]
 
 
 def _set_feature_flags() -> list[str]:
+    features = "ffi,python,extension-module"
+    flags = ["--no-default-features", "--features"]
+
     if HIGH_PRECISION:
-        return ["--features", "high-precision,ffi,python,extension-module"]
-    else:
-        return ["--features", "ffi,python,extension-module"]
+        features += ",high-precision"
+
+    flags.append(features)
+
+    return flags
 
 
 def _build_rust_libs() -> None:
@@ -186,7 +191,7 @@ CYTHON_COMPILER_DIRECTIVES = {
 }
 
 # TODO: Temporarily separate Cython configuration while we require v3.0.11 for coverage
-if cython_compiler_version == "3.1.1":
+if cython_compiler_version == "3.1.2":
     Options.warning_errors = True  # Treat compiler warnings as errors
     Options.extra_warnings = True
     CYTHON_COMPILER_DIRECTIVES["warn.deprecated.IF"] = False
@@ -472,6 +477,7 @@ if __name__ == "__main__":
     print_env_var_if_exists("CFLAGS")
     print_env_var_if_exists("LDFLAGS")
     print_env_var_if_exists("LD_LIBRARY_PATH")
+    print_env_var_if_exists("PYO3_PYTHON")
     print_env_var_if_exists("RUSTFLAGS")
     print_env_var_if_exists("DRY_RUN")
 
